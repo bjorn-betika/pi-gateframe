@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import extension, {
   normalizeBaseUrl,
   mapGateframeModel,
@@ -9,6 +13,7 @@ import extension, {
   discoverModels,
   registerGateframeProvider,
   defaultGateframeConfig,
+  loadModelOverrides,
   __resetLastGoodModelsCache,
 } from '../.pi/extensions/gateframe-provider/index.ts';
 
@@ -25,9 +30,141 @@ test('normalizeBaseUrl appends /v1 when missing', () => {
 });
 
 test('mapGateframeModel maps OpenAI model id to pi model definition', () => {
-  const model = mapGateframeModel({ id: 'gateframe/minimax-2.7', object: 'model' });
+  const model = mapGateframeModel({ id: 'gateframe/minimax-2.7' });
   assert.equal(model.id, 'gateframe/minimax-2.7');
+  assert.equal(typeof model.reasoning, 'boolean');
+});
+
+test('mapGateframeModel applies known-id default metadata', () => {
+  const model = mapGateframeModel({ id: 'gateframe/opus-4.7' });
+  // opus-4.7 is marked reasoning-capable in the built-in defaults table.
+  assert.equal(model.reasoning, true);
+});
+
+test('mapGateframeModel falls back to safe defaults for unknown ids', () => {
+  const model = mapGateframeModel({ id: 'gateframe/brand-new-model' });
   assert.equal(model.reasoning, false);
+  assert.equal(model.contextWindow, 128000);
+  assert.equal(model.maxTokens, 8192);
+  assert.equal(model.cost.input, 0);
+});
+
+test('mapGateframeModel accepts runtime overrides', () => {
+  const model = mapGateframeModel(
+    { id: 'gateframe/minimax-2.7' },
+    {
+      'gateframe/minimax-2.7': {
+        contextWindow: 256000,
+        maxTokens: 4096,
+        reasoning: true,
+        cost: { input: 1.5, output: 4.5, cacheRead: 0.15, cacheWrite: 1.5 },
+      },
+    },
+  );
+  assert.equal(model.contextWindow, 256000);
+  assert.equal(model.maxTokens, 4096);
+  assert.equal(model.reasoning, true);
+  assert.equal(model.cost.input, 1.5);
+  assert.equal(model.cost.output, 4.5);
+});
+
+test('loadModelOverrides reads JSON file when path is set', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gf-overrides-'));
+  const file = join(dir, 'overrides.json');
+  writeFileSync(file, JSON.stringify({
+    'gateframe/opus-4.7': { contextWindow: 200000, reasoning: true },
+  }));
+
+  try {
+    const { overrides, error } = loadModelOverrides({ GATEFRAME_MODEL_OVERRIDES_PATH: file });
+    assert.equal(error, undefined);
+    assert.equal(overrides['gateframe/opus-4.7'].contextWindow, 200000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadModelOverrides returns empty overrides when path unset', () => {
+  const { overrides, error } = loadModelOverrides({});
+  assert.deepEqual(overrides, {});
+  assert.equal(error, undefined);
+});
+
+test('loadModelOverrides reports error for malformed file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gf-overrides-'));
+  const file = join(dir, 'bad.json');
+  writeFileSync(file, '{ not json');
+
+  try {
+    const { overrides, error } = loadModelOverrides({ GATEFRAME_MODEL_OVERRIDES_PATH: file });
+    assert.deepEqual(overrides, {});
+    assert.ok(error, 'should return an error for malformed JSON');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('registerGateframeProvider applies overrides file to discovered models', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gf-overrides-'));
+  const file = join(dir, 'overrides.json');
+  writeFileSync(file, JSON.stringify({
+    'gateframe/opus-4.7': { contextWindow: 200000, maxTokens: 16384, reasoning: true },
+  }));
+
+  const providerCalls = [];
+  try {
+    await registerGateframeProvider({
+      pi: { registerProvider: (name, config) => providerCalls.push({ name, config }) },
+      env: {
+        GATEFRAME_API_KEY: 'gf_test',
+        GATEFRAME_BASE_URL: 'http://node1.gateframe.ai:3000',
+        GATEFRAME_MODEL_OVERRIDES_PATH: file,
+      },
+      notify: () => {},
+      fetchImpl: async () => new Response(JSON.stringify({
+        object: 'list',
+        data: [{ id: 'gateframe/opus-4.7', object: 'model' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  const opus = providerCalls[0].config.models.find(m => m.id === 'gateframe/opus-4.7');
+  assert.ok(opus, 'should register opus model');
+  assert.equal(opus.contextWindow, 200000);
+  assert.equal(opus.maxTokens, 16384);
+  assert.equal(opus.reasoning, true);
+});
+
+test('registerGateframeProvider warns when malformed overrides file is configured', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gf-overrides-'));
+  const file = join(dir, 'bad.json');
+  writeFileSync(file, 'not-json');
+
+  const notices = [];
+  try {
+    await registerGateframeProvider({
+      pi: { registerProvider: () => {} },
+      env: {
+        GATEFRAME_API_KEY: 'gf_test',
+        GATEFRAME_BASE_URL: 'http://node1.gateframe.ai:3000',
+        GATEFRAME_MODEL_OVERRIDES_PATH: file,
+      },
+      notify: (...args) => notices.push(args),
+      fetchImpl: async () => new Response(JSON.stringify({
+        object: 'list',
+        data: [{ id: 'gateframe/opus-4.7', object: 'model' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  assert.ok(
+    notices.some(([msg, level]) => /overrides/i.test(msg) && level === 'warning'),
+    'should notify a warning about bad overrides file',
+  );
 });
 
 test('fallback models include all known gateframe ids', () => {

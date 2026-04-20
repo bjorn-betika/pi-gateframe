@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 const DEFAULT_BASE_URL = "http://node1.gateframe.ai:3000";
@@ -7,6 +9,63 @@ const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
 
 export type NotifyLevel = "info" | "success" | "warning" | "error";
 export type NotifyFn = (message: string, level?: NotifyLevel) => void;
+
+export interface ModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+export interface ModelOverride {
+  name?: string;
+  reasoning?: boolean;
+  input?: readonly ("text" | "image")[];
+  cost?: Partial<ModelCost>;
+  contextWindow?: number;
+  maxTokens?: number;
+  compat?: Record<string, unknown>;
+}
+
+export type ModelOverrides = Record<string, ModelOverride>;
+
+/**
+ * Built-in defaults for Gateframe-routed model ids.
+ *
+ * NOTE: These are conservative placeholders until Gateframe exposes model
+ * metadata via `/v1/models` (see docs/feature-requests/...-gateframe-model-metadata.md).
+ * Operators can override any field per id via `GATEFRAME_MODEL_OVERRIDES_PATH`.
+ *
+ * `cost` is intentionally zeroed by default — shipping wrong pricing is worse
+ * than showing $0 until we have real values.
+ */
+export const KNOWN_MODEL_DEFAULTS: ModelOverrides = {
+  "gateframe/opus-4.7": {
+    reasoning: true,
+    contextWindow: 200_000,
+    maxTokens: 16_384,
+  },
+  "gateframe/qwen-3.6": {
+    reasoning: true,
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  },
+  "gateframe/minimax-2.7": {
+    reasoning: false,
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  },
+  "gateframe/chatgpt-5.4": {
+    reasoning: true,
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  },
+  "gateframe/glm-5.1": {
+    reasoning: false,
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  },
+};
 
 export function normalizeBaseUrl(input: string): string {
   const trimmed = input.trim().replace(/\/+$/, "");
@@ -21,28 +80,77 @@ export function defaultGateframeConfig(env: Record<string, string | undefined>) 
   };
 }
 
-export function mapGateframeModel(model: { id: string }) {
+function mergeOverride(base: ModelOverride | undefined, extra: ModelOverride | undefined): ModelOverride {
+  if (!base && !extra) return {};
   return {
-    id: model.id,
-    name: model.id,
-    reasoning: false,
-    input: ["text"] as const,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    ...(base ?? {}),
+    ...(extra ?? {}),
+    cost: { ...(base?.cost ?? {}), ...(extra?.cost ?? {}) },
+    compat: { ...(base?.compat ?? {}), ...(extra?.compat ?? {}) },
   };
 }
 
-const KNOWN_MODEL_IDS = [
-  "gateframe/opus-4.7",
-  "gateframe/qwen-3.6",
-  "gateframe/minimax-2.7",
-  "gateframe/chatgpt-5.4",
-  "gateframe/glm-5.1",
-];
+export function mapGateframeModel(model: { id: string }, overrides: ModelOverrides = {}) {
+  const merged = mergeOverride(KNOWN_MODEL_DEFAULTS[model.id], overrides[model.id]);
+  const cost: ModelCost = {
+    input: merged.cost?.input ?? 0,
+    output: merged.cost?.output ?? 0,
+    cacheRead: merged.cost?.cacheRead ?? 0,
+    cacheWrite: merged.cost?.cacheWrite ?? 0,
+  };
+  const result: Record<string, unknown> = {
+    id: model.id,
+    name: merged.name ?? model.id,
+    reasoning: merged.reasoning ?? false,
+    input: merged.input ?? (["text"] as const),
+    cost,
+    contextWindow: merged.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: merged.maxTokens ?? DEFAULT_MAX_TOKENS,
+  };
+  if (merged.compat && Object.keys(merged.compat).length > 0) {
+    result.compat = merged.compat;
+  }
+  return result as {
+    id: string;
+    name: string;
+    reasoning: boolean;
+    input: readonly ("text" | "image")[];
+    cost: ModelCost;
+    contextWindow: number;
+    maxTokens: number;
+    compat?: Record<string, unknown>;
+  };
+}
 
-export function getFallbackModels() {
-  return KNOWN_MODEL_IDS.map((id) => mapGateframeModel({ id }));
+const KNOWN_MODEL_IDS = Object.keys(KNOWN_MODEL_DEFAULTS);
+
+export function getFallbackModels(overrides: ModelOverrides = {}) {
+  return KNOWN_MODEL_IDS.map((id) => mapGateframeModel({ id }, overrides));
+}
+
+/**
+ * Loads per-model overrides from the JSON file at
+ * `GATEFRAME_MODEL_OVERRIDES_PATH`. Returns `{ overrides: {} }` when the env
+ * var is unset. Returns `{ overrides: {}, error }` when the file is missing or
+ * malformed, so the caller can surface a warning.
+ */
+export function loadModelOverrides(env: Record<string, string | undefined>): {
+  overrides: ModelOverrides;
+  error?: string;
+} {
+  const path = env.GATEFRAME_MODEL_OVERRIDES_PATH;
+  if (!path) return { overrides: {} };
+  try {
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { overrides: {}, error: `Gateframe overrides file is not a JSON object: ${path}` };
+    }
+    return { overrides: parsed as ModelOverrides };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { overrides: {}, error: `Failed to read Gateframe overrides at ${path}: ${detail}` };
+  }
 }
 
 // Module-scoped memory of the last successfully registered model list, keyed
@@ -59,11 +167,13 @@ export async function discoverModels({
   apiKey,
   fetchImpl = fetch,
   timeoutMs = DEFAULT_DISCOVERY_TIMEOUT_MS,
+  overrides = {},
 }: {
   baseUrl: string;
   apiKey: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  overrides?: ModelOverrides;
 }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -85,9 +195,10 @@ export async function discoverModels({
     throw new Error(`Gateframe model discovery failed: ${response.status}`);
   }
 
-
   const payload = (await response.json()) as { data?: unknown[] };
-  const models = Array.isArray(payload.data) ? payload.data.filter(isGateframeModel).map(mapGateframeModel) : [];
+  const models = Array.isArray(payload.data)
+    ? payload.data.filter(isGateframeModel).map((m) => mapGateframeModel(m, overrides))
+    : [];
 
   if (models.length === 0) {
     throw new Error("Gateframe model discovery returned no valid models");
@@ -115,6 +226,11 @@ export async function registerGateframeProvider({
     return;
   }
 
+  const { overrides, error: overridesError } = loadModelOverrides(env);
+  if (overridesError) {
+    notify(overridesError, "warning");
+  }
+
   let models: ReturnType<typeof mapGateframeModel>[];
   try {
     models = await discoverModels({
@@ -122,11 +238,12 @@ export async function registerGateframeProvider({
       apiKey: config.apiKey,
       fetchImpl,
       timeoutMs: discoveryTimeoutMs,
+      overrides,
     });
     lastGoodModelsByBaseUrl.set(config.baseUrl, models);
   } catch (error) {
     const previous = lastGoodModelsByBaseUrl.get(config.baseUrl);
-    models = previous ?? getFallbackModels();
+    models = previous ?? getFallbackModels(overrides);
     const detail = error instanceof Error ? error.message : String(error);
     const suffix = previous ? "keeping previously discovered models" : "using fallback models";
     notify(`Gateframe model discovery failed, ${suffix}: ${detail}`, "warning");

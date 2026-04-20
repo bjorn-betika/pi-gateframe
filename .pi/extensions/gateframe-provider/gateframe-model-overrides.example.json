@@ -1,0 +1,27 @@
+{
+  "//": "Example override file for Gateframe models. Copy this file, edit values, and point GATEFRAME_MODEL_OVERRIDES_PATH at it. All fields are optional; unspecified fields fall through to built-in defaults.",
+  "gateframe/opus-4.7": {
+    "name": "Opus 4.7 (via Gateframe)",
+    "reasoning": true,
+    "input": ["text", "image"],
+    "contextWindow": 200000,
+    "maxTokens": 16384,
+    "cost": {
+      "input": 3.0,
+      "output": 15.0,
+      "cacheRead": 0.3,
+      "cacheWrite": 3.75
+    },
+    "compat": {
+      "thinkingFormat": "openai"
+    }
+  },
+  "gateframe/qwen-3.6": {
+    "reasoning": true,
+    "contextWindow": 128000,
+    "maxTokens": 8192,
+    "compat": {
+      "thinkingFormat": "qwen"
+    }
+  }
+}
