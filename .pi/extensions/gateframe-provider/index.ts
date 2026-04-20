@@ -6,8 +6,8 @@ const DEFAULT_MAX_TOKENS = 8192;
 
 export function normalizeBaseUrl(input: string): string {
   const trimmed = input.trim().replace(/\/+$/, "");
-  if (trimmed.endsWith("/v1")) return trimmed.slice(0, -3);
-  return trimmed;
+  if (trimmed.endsWith("/v1")) return trimmed;
+  return `${trimmed}/v1`;
 }
 
 export function defaultGateframeConfig(env: Record<string, string | undefined>) {
@@ -46,7 +46,7 @@ export async function discoverModels({
   apiKey: string;
   fetchImpl?: typeof fetch;
 }) {
-  const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/v1/models`, {
+  const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/models`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${apiKey}`,

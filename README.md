@@ -12,6 +12,7 @@ export GATEFRAME_BASE_URL=http://node1.gateframe.ai:3000
 ```
 
 `GATEFRAME_BASE_URL` is optional; if omitted, the extension defaults to `http://node1.gateframe.ai:3000`.
+You can set it either with or without a trailing `/v1` — the extension normalizes it for pi's OpenAI-compatible provider wiring.
 
 ## Usage
 

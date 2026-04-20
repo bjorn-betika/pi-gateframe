@@ -11,12 +11,12 @@ import extension, {
   defaultGateframeConfig,
 } from '../.pi/extensions/gateframe-provider/index.ts';
 
-test('normalizeBaseUrl strips trailing /v1', () => {
-  assert.equal(normalizeBaseUrl('http://node1.gateframe.ai:3000/v1'), 'http://node1.gateframe.ai:3000');
+test('normalizeBaseUrl preserves trailing /v1', () => {
+  assert.equal(normalizeBaseUrl('http://node1.gateframe.ai:3000/v1'), 'http://node1.gateframe.ai:3000/v1');
 });
 
-test('normalizeBaseUrl preserves base url without /v1', () => {
-  assert.equal(normalizeBaseUrl('http://node1.gateframe.ai:3000'), 'http://node1.gateframe.ai:3000');
+test('normalizeBaseUrl appends /v1 when missing', () => {
+  assert.equal(normalizeBaseUrl('http://node1.gateframe.ai:3000'), 'http://node1.gateframe.ai:3000/v1');
 });
 
 test('mapGateframeModel maps OpenAI model id to pi model definition', () => {
@@ -102,7 +102,7 @@ test('registerGateframeProvider falls back when discovery fails', async () => {
 
   assert.equal(providerCalls.length, 1);
   assert.equal(providerCalls[0].name, 'gateframe');
-  assert.equal(providerCalls[0].config.baseUrl, 'http://node1.gateframe.ai:3000');
+  assert.equal(providerCalls[0].config.baseUrl, 'http://node1.gateframe.ai:3000/v1');
   assert.deepEqual(providerCalls[0].config.models.map(model => model.id), ['gateframe/minimax-2.7']);
   assert.equal(notices.length, 1);
 });
@@ -115,7 +115,7 @@ test('defaultGateframeConfig returns normalized env configuration', () => {
 
   assert.deepEqual(config, {
     apiKey: 'gf_test',
-    baseUrl: 'http://node1.gateframe.ai:3000',
+    baseUrl: 'http://node1.gateframe.ai:3000/v1',
   });
 });
 
