@@ -9,7 +9,12 @@ import extension, {
   discoverModels,
   registerGateframeProvider,
   defaultGateframeConfig,
+  __resetLastGoodModelsCache,
 } from '../.pi/extensions/gateframe-provider/index.ts';
+
+test.beforeEach(() => {
+  __resetLastGoodModelsCache();
+});
 
 test('normalizeBaseUrl preserves trailing /v1', () => {
   assert.equal(normalizeBaseUrl('http://node1.gateframe.ai:3000/v1'), 'http://node1.gateframe.ai:3000/v1');
@@ -25,9 +30,17 @@ test('mapGateframeModel maps OpenAI model id to pi model definition', () => {
   assert.equal(model.reasoning, false);
 });
 
-test('fallback models include gateframe/minimax-2.7', () => {
+test('fallback models include all known gateframe ids', () => {
   const ids = getFallbackModels().map(model => model.id);
-  assert.ok(ids.includes('gateframe/minimax-2.7'));
+  for (const expected of [
+    'gateframe/opus-4.7',
+    'gateframe/qwen-3.6',
+    'gateframe/minimax-2.7',
+    'gateframe/chatgpt-5.4',
+    'gateframe/glm-5.1',
+  ]) {
+    assert.ok(ids.includes(expected), `fallback should include ${expected}`);
+  }
 });
 
 test('discoverModels returns mapped models from /v1/models', async () => {
@@ -103,10 +116,51 @@ test('registerGateframeProvider falls back when discovery fails', async () => {
   assert.equal(providerCalls.length, 1);
   assert.equal(providerCalls[0].name, 'gateframe');
   assert.equal(providerCalls[0].config.baseUrl, 'http://node1.gateframe.ai:3000/v1');
-  assert.deepEqual(providerCalls[0].config.models.map(model => model.id), ['gateframe/minimax-2.7']);
+  assert.ok(
+    providerCalls[0].config.models.some(m => m.id === 'gateframe/minimax-2.7'),
+    'fallback models should include gateframe/minimax-2.7',
+  );
   assert.equal(notices.length, 1);
   assert.equal(providerCalls[0].config.authHeader, undefined, 'should not set redundant authHeader with openai-completions');
   assert.equal(providerCalls[0].config.api, 'openai-completions');
+});
+
+test('registerGateframeProvider keeps previously discovered models when refresh fails', async () => {
+  const providerCalls = [];
+  const notices = [];
+  let call = 0;
+
+  const run = async (fetchImpl) => registerGateframeProvider({
+    pi: { registerProvider: (name, config) => providerCalls.push({ name, config }) },
+    env: {
+      GATEFRAME_API_KEY: 'gf_test',
+      GATEFRAME_BASE_URL: 'http://node1.gateframe.ai:3000',
+    },
+    notify: (...args) => notices.push(args),
+    fetchImpl,
+  });
+
+  // First call: discovery succeeds, registers two models.
+  await run(async () => new Response(JSON.stringify({
+    object: 'list',
+    data: [
+      { id: 'gateframe/opus-4.7', object: 'model' },
+      { id: 'gateframe/qwen-3.6', object: 'model' },
+    ],
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+  // Second call: discovery fails. Extension must NOT shrink picker to fallback.
+  await run(async () => { call++; throw new Error('transient'); });
+
+  assert.equal(providerCalls.length, 2);
+  const firstIds = providerCalls[0].config.models.map(m => m.id);
+  const secondIds = providerCalls[1].config.models.map(m => m.id);
+  assert.deepEqual(
+    secondIds,
+    firstIds,
+    'second registration after failed refresh should reuse previously discovered models',
+  );
+  assert.ok(notices.some(([msg]) => /discovery failed/i.test(msg)));
 });
 
 test('discoverModels aborts when fetch exceeds timeout', async () => {
@@ -132,7 +186,10 @@ test('discoverModels aborts when fetch exceeds timeout', async () => {
 
   assert.equal(fetchAborted, true, 'fetch should have been aborted by the timeout');
   assert.equal(providerCalls.length, 1, 'provider should still register with fallback models');
-  assert.deepEqual(providerCalls[0].config.models.map(m => m.id), ['gateframe/minimax-2.7']);
+  assert.ok(
+    providerCalls[0].config.models.some(m => m.id === 'gateframe/minimax-2.7'),
+    'fallback models should include gateframe/minimax-2.7',
+  );
   assert.ok(notices.some(([msg]) => /discovery failed/i.test(msg)), 'should notify about discovery failure');
 });
 

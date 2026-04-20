@@ -33,9 +33,22 @@ export function mapGateframeModel(model: { id: string }) {
   };
 }
 
+const KNOWN_MODEL_IDS = [
+  "gateframe/opus-4.7",
+  "gateframe/qwen-3.6",
+  "gateframe/minimax-2.7",
+  "gateframe/chatgpt-5.4",
+  "gateframe/glm-5.1",
+];
+
 export function getFallbackModels() {
-  return [mapGateframeModel({ id: "gateframe/minimax-2.7" })];
+  return KNOWN_MODEL_IDS.map((id) => mapGateframeModel({ id }));
 }
+
+// Module-scoped memory of the last successfully registered model list, keyed
+// by base URL, so a transient discovery failure on refresh does not collapse
+// the user's model picker to the fallback set.
+const lastGoodModelsByBaseUrl = new Map<string, ReturnType<typeof mapGateframeModel>[]>();
 
 function isGateframeModel(value: unknown): value is { id: string } {
   return !!value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string";
@@ -102,7 +115,7 @@ export async function registerGateframeProvider({
     return;
   }
 
-  let models;
+  let models: ReturnType<typeof mapGateframeModel>[];
   try {
     models = await discoverModels({
       baseUrl: config.baseUrl,
@@ -110,12 +123,13 @@ export async function registerGateframeProvider({
       fetchImpl,
       timeoutMs: discoveryTimeoutMs,
     });
+    lastGoodModelsByBaseUrl.set(config.baseUrl, models);
   } catch (error) {
-    models = getFallbackModels();
-    notify(
-      `Gateframe model discovery failed, using fallback models: ${error instanceof Error ? error.message : String(error)}`,
-      "warning",
-    );
+    const previous = lastGoodModelsByBaseUrl.get(config.baseUrl);
+    models = previous ?? getFallbackModels();
+    const detail = error instanceof Error ? error.message : String(error);
+    const suffix = previous ? "keeping previously discovered models" : "using fallback models";
+    notify(`Gateframe model discovery failed, ${suffix}: ${detail}`, "warning");
   }
 
   pi.registerProvider("gateframe", {
@@ -124,6 +138,11 @@ export async function registerGateframeProvider({
     api: "openai-completions",
     models,
   });
+}
+
+/** Test-only: clear the last-good-models memoization between tests. */
+export function __resetLastGoodModelsCache() {
+  lastGoodModelsByBaseUrl.clear();
 }
 
 export default function (pi: ExtensionAPI) {
