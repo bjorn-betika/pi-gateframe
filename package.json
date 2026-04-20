@@ -1,0 +1,13 @@
+{
+  "name": "gateframe-pi-integration",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi extension that registers Gateframe as a model provider.",
+  "scripts": {
+    "test": "node --test tests/gateframe-provider.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}
