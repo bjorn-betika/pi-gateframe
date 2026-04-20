@@ -106,11 +106,23 @@ export async function registerGateframeProvider({
 }
 
 export default function (pi: ExtensionAPI) {
-  pi.on("session_start", async (_event, ctx) => {
+  const refreshProvider = async (notify?: (message: string, level?: string) => void) => {
     await registerGateframeProvider({
       pi,
       env: process.env,
-      notify: (message, level) => ctx.ui?.notify?.(message, level as never),
+      notify,
     });
+  };
+
+  pi.on("session_start", async (_event, ctx) => {
+    await refreshProvider((message, level) => ctx.ui?.notify?.(message, level as never));
+  });
+
+  pi.registerCommand("gateframe-refresh", {
+    description: "Refresh Gateframe model discovery",
+    handler: async (_args, ctx) => {
+      await refreshProvider((message, level) => ctx.ui?.notify?.(message, level as never));
+      ctx.ui?.notify?.("Gateframe models refreshed.", "success" as never);
+    },
   });
 }

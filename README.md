@@ -34,3 +34,11 @@ Then open the model picker:
 ```
 
 You should see `gateframe/...` models discovered from Gateframe's `/v1/models` endpoint. If discovery fails, the extension falls back to a minimal default model list so you can still try the provider.
+
+## Refreshing discovered models
+
+If you want to force a new model discovery call without restarting pi, run:
+
+```text
+/gateframe-refresh
+```

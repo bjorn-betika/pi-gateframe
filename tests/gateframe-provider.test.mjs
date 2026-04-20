@@ -122,9 +122,13 @@ test('defaultGateframeConfig returns normalized env configuration', () => {
 test('default extension registers the gateframe provider on session start', async () => {
   const providerCalls = [];
   const eventHandlers = {};
+  const commands = {};
   const fakePi = {
     on(event, handler) {
       eventHandlers[event] = handler;
+    },
+    registerCommand(name, config) {
+      commands[name] = config;
     },
     registerProvider(name, config) {
       providerCalls.push({ name, config });
@@ -148,8 +152,48 @@ test('default extension registers the gateframe provider on session start', asyn
     process.env = originalEnv;
   }
 
+  assert.equal(typeof commands['gateframe-refresh']?.handler, 'function');
   assert.equal(providerCalls.length, 1);
   assert.equal(providerCalls[0].name, 'gateframe');
+});
+
+test('gateframe-refresh command re-registers provider and notifies user', async () => {
+  const providerCalls = [];
+  const eventHandlers = {};
+  const commands = {};
+  const notifications = [];
+  const fakePi = {
+    on(event, handler) {
+      eventHandlers[event] = handler;
+    },
+    registerCommand(name, config) {
+      commands[name] = config;
+    },
+    registerProvider(name, config) {
+      providerCalls.push({ name, config });
+    },
+  };
+
+  extension(fakePi);
+
+  const originalEnv = process.env;
+  process.env = {
+    ...originalEnv,
+    GATEFRAME_API_KEY: 'gf_test',
+    GATEFRAME_BASE_URL: 'http://node1.gateframe.ai:3000',
+  };
+
+  try {
+    await commands['gateframe-refresh'].handler('', {
+      ui: { notify: (...args) => notifications.push(args) },
+    });
+  } finally {
+    process.env = originalEnv;
+  }
+
+  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls[0].name, 'gateframe');
+  assert.equal(notifications.at(-1)?.[0], 'Gateframe models refreshed.');
 });
 
 test('documentation covers required Gateframe setup', async () => {
