@@ -4,6 +4,9 @@ const DEFAULT_BASE_URL = "http://node1.gateframe.ai:3000";
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
 
+export type NotifyLevel = "info" | "success" | "warning" | "error";
+export type NotifyFn = (message: string, level?: NotifyLevel) => void;
+
 export function normalizeBaseUrl(input: string): string {
   const trimmed = input.trim().replace(/\/+$/, "");
   if (trimmed.endsWith("/v1")) return trimmed;
@@ -17,7 +20,7 @@ export function defaultGateframeConfig(env: Record<string, string | undefined>) 
   };
 }
 
-export function mapGateframeModel(model: { id: string; object?: string }) {
+export function mapGateframeModel(model: { id: string }) {
   return {
     id: model.id,
     name: model.id,
@@ -30,10 +33,10 @@ export function mapGateframeModel(model: { id: string; object?: string }) {
 }
 
 export function getFallbackModels() {
-  return [mapGateframeModel({ id: "gateframe/minimax-2.7", object: "model" })];
+  return [mapGateframeModel({ id: "gateframe/minimax-2.7" })];
 }
 
-function isGateframeModel(value: unknown): value is { id: string; object?: string } {
+function isGateframeModel(value: unknown): value is { id: string } {
   return !!value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string";
 }
 
@@ -76,7 +79,7 @@ export async function registerGateframeProvider({
 }: {
   pi: { registerProvider: (name: string, config: Record<string, unknown>) => void };
   env: Record<string, string | undefined>;
-  notify?: (message: string, level?: string) => void;
+  notify?: NotifyFn;
   fetchImpl?: typeof fetch;
 }) {
   const config = defaultGateframeConfig(env);
@@ -106,7 +109,7 @@ export async function registerGateframeProvider({
 }
 
 export default function (pi: ExtensionAPI) {
-  const refreshProvider = async (notify?: (message: string, level?: string) => void) => {
+  const refreshProvider = async (notify?: NotifyFn) => {
     await registerGateframeProvider({
       pi,
       env: process.env,
@@ -114,15 +117,18 @@ export default function (pi: ExtensionAPI) {
     });
   };
 
+  const toCtxNotify = (ctx: { ui?: { notify?: (message: string, level?: string) => void } }): NotifyFn =>
+    (message, level) => ctx.ui?.notify?.(message, level);
+
   pi.on("session_start", async (_event, ctx) => {
-    await refreshProvider((message, level) => ctx.ui?.notify?.(message, level as never));
+    await refreshProvider(toCtxNotify(ctx));
   });
 
   pi.registerCommand("gateframe-refresh", {
     description: "Refresh Gateframe model discovery",
     handler: async (_args, ctx) => {
-      await refreshProvider((message, level) => ctx.ui?.notify?.(message, level as never));
-      ctx.ui?.notify?.("Gateframe models refreshed.", "success" as never);
+      await refreshProvider(toCtxNotify(ctx));
+      ctx.ui?.notify?.("Gateframe models refreshed.", "success");
     },
   });
 }
