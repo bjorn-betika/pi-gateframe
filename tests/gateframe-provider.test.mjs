@@ -105,6 +105,35 @@ test('registerGateframeProvider falls back when discovery fails', async () => {
   assert.equal(providerCalls[0].config.baseUrl, 'http://node1.gateframe.ai:3000/v1');
   assert.deepEqual(providerCalls[0].config.models.map(model => model.id), ['gateframe/minimax-2.7']);
   assert.equal(notices.length, 1);
+  assert.equal(providerCalls[0].config.authHeader, undefined, 'should not set redundant authHeader with openai-completions');
+  assert.equal(providerCalls[0].config.api, 'openai-completions');
+});
+
+test('discoverModels aborts when fetch exceeds timeout', async () => {
+  const notices = [];
+  const providerCalls = [];
+  let fetchAborted = false;
+
+  await registerGateframeProvider({
+    pi: { registerProvider: (name, config) => providerCalls.push({ name, config }) },
+    env: {
+      GATEFRAME_API_KEY: 'gf_test',
+      GATEFRAME_BASE_URL: 'http://node1.gateframe.ai:3000',
+    },
+    notify: (...args) => notices.push(args),
+    fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => {
+        fetchAborted = true;
+        reject(new DOMException('aborted', 'AbortError'));
+      });
+    }),
+    discoveryTimeoutMs: 10,
+  });
+
+  assert.equal(fetchAborted, true, 'fetch should have been aborted by the timeout');
+  assert.equal(providerCalls.length, 1, 'provider should still register with fallback models');
+  assert.deepEqual(providerCalls[0].config.models.map(m => m.id), ['gateframe/minimax-2.7']);
+  assert.ok(notices.some(([msg]) => /discovery failed/i.test(msg)), 'should notify about discovery failure');
 });
 
 test('defaultGateframeConfig returns normalized env configuration', () => {

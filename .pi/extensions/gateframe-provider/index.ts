@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 const DEFAULT_BASE_URL = "http://node1.gateframe.ai:3000";
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
+const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
 
 export type NotifyLevel = "info" | "success" | "warning" | "error";
 export type NotifyFn = (message: string, level?: NotifyLevel) => void;
@@ -44,22 +45,33 @@ export async function discoverModels({
   baseUrl,
   apiKey,
   fetchImpl = fetch,
+  timeoutMs = DEFAULT_DISCOVERY_TIMEOUT_MS,
 }: {
   baseUrl: string;
   apiKey: string;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 }) {
-  const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/models`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "application/json",
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/models`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     throw new Error(`Gateframe model discovery failed: ${response.status}`);
   }
+
 
   const payload = (await response.json()) as { data?: unknown[] };
   const models = Array.isArray(payload.data) ? payload.data.filter(isGateframeModel).map(mapGateframeModel) : [];
@@ -76,11 +88,13 @@ export async function registerGateframeProvider({
   env,
   notify = () => {},
   fetchImpl = fetch,
+  discoveryTimeoutMs,
 }: {
   pi: { registerProvider: (name: string, config: Record<string, unknown>) => void };
   env: Record<string, string | undefined>;
   notify?: NotifyFn;
   fetchImpl?: typeof fetch;
+  discoveryTimeoutMs?: number;
 }) {
   const config = defaultGateframeConfig(env);
   if (!config.apiKey) {
@@ -90,7 +104,12 @@ export async function registerGateframeProvider({
 
   let models;
   try {
-    models = await discoverModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, fetchImpl });
+    models = await discoverModels({
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      fetchImpl,
+      timeoutMs: discoveryTimeoutMs,
+    });
   } catch (error) {
     models = getFallbackModels();
     notify(
@@ -102,7 +121,6 @@ export async function registerGateframeProvider({
   pi.registerProvider("gateframe", {
     baseUrl: config.baseUrl,
     apiKey: "GATEFRAME_API_KEY",
-    authHeader: true,
     api: "openai-completions",
     models,
   });
