@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-const DEFAULT_BASE_URL = "http://node1.gateframe.ai:3000";
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
@@ -73,10 +72,14 @@ export function normalizeBaseUrl(input: string): string {
   return `${trimmed}/v1`;
 }
 
-export function defaultGateframeConfig(env: Record<string, string | undefined>) {
+export function defaultGateframeConfig(env: Record<string, string | undefined>): {
+  apiKey: string | undefined;
+  baseUrl: string | undefined;
+} {
+  const raw = env.GATEFRAME_BASE_URL;
   return {
     apiKey: env.GATEFRAME_API_KEY,
-    baseUrl: normalizeBaseUrl(env.GATEFRAME_BASE_URL || DEFAULT_BASE_URL),
+    baseUrl: raw && raw.trim() ? normalizeBaseUrl(raw) : undefined,
   };
 }
 
@@ -223,6 +226,13 @@ export async function registerGateframeProvider({
   const config = defaultGateframeConfig(env);
   if (!config.apiKey) {
     notify("Set GATEFRAME_API_KEY to enable the Gateframe pi provider.", "warning");
+    return;
+  }
+  if (!config.baseUrl) {
+    notify(
+      "Set GATEFRAME_BASE_URL (e.g. https://gateframe.example.com) to enable the Gateframe pi provider.",
+      "warning",
+    );
     return;
   }
 

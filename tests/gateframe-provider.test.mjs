@@ -21,12 +21,43 @@ test.beforeEach(() => {
   __resetLastGoodModelsCache();
 });
 
+function getHeader(init, name) {
+  const headers = init?.headers;
+  if (!headers) return undefined;
+  if (typeof headers.get === 'function') return headers.get(name);
+  // Plain object. Do a case-insensitive lookup.
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === name.toLowerCase()) return v;
+  }
+  return undefined;
+}
+
 test('normalizeBaseUrl preserves trailing /v1', () => {
   assert.equal(normalizeBaseUrl('http://node1.gateframe.ai:3000/v1'), 'http://node1.gateframe.ai:3000/v1');
 });
 
 test('normalizeBaseUrl appends /v1 when missing', () => {
   assert.equal(normalizeBaseUrl('http://node1.gateframe.ai:3000'), 'http://node1.gateframe.ai:3000/v1');
+});
+
+test('registerGateframeProvider skips registration when base url is missing', async () => {
+  const providerCalls = [];
+  const notices = [];
+
+  await registerGateframeProvider({
+    pi: { registerProvider: (...args) => providerCalls.push(args) },
+    env: { GATEFRAME_API_KEY: 'gf_test' },
+    notify: (...args) => notices.push(args),
+    fetchImpl: async () => {
+      throw new Error('should not be called');
+    },
+  });
+
+  assert.equal(providerCalls.length, 0, 'must not register without GATEFRAME_BASE_URL');
+  assert.ok(
+    notices.some(([msg, level]) => /GATEFRAME_BASE_URL/i.test(msg) && level === 'warning'),
+    'should notify a warning naming GATEFRAME_BASE_URL',
+  );
 });
 
 test('mapGateframeModel maps OpenAI model id to pi model definition', () => {
@@ -186,7 +217,7 @@ test('discoverModels returns mapped models from /v1/models', async () => {
     apiKey: 'gf_test',
     fetchImpl: async (url, init) => {
       assert.equal(url, 'http://node1.gateframe.ai:3000/v1/models');
-      assert.equal(init.headers.Authorization, 'Bearer gf_test');
+      assert.equal(getHeader(init, 'Authorization'), 'Bearer gf_test');
       return new Response(JSON.stringify({
         object: 'list',
         data: [
@@ -342,6 +373,12 @@ test('defaultGateframeConfig returns normalized env configuration', () => {
   });
 });
 
+test('defaultGateframeConfig returns undefined baseUrl when env var is missing', () => {
+  const config = defaultGateframeConfig({ GATEFRAME_API_KEY: 'gf_test' });
+  assert.equal(config.apiKey, 'gf_test');
+  assert.equal(config.baseUrl, undefined, 'no default baseUrl — must be explicit');
+});
+
 test('default extension registers the gateframe provider on session start', async () => {
   const providerCalls = [];
   const eventHandlers = {};
@@ -427,6 +464,10 @@ test('documentation covers required Gateframe setup', async () => {
 
   assert.match(envExample, /GATEFRAME_API_KEY=/);
   assert.match(envExample, /GATEFRAME_BASE_URL=/);
+  assert.match(envExample, /GATEFRAME_MODEL_OVERRIDES_PATH/);
   assert.match(readme, /\.pi\/extensions\/gateframe-provider/);
   assert.match(readme, /\/model/);
+  assert.match(readme, /\/gateframe-refresh/);
+  assert.match(readme, /GATEFRAME_MODEL_OVERRIDES_PATH/);
+  assert.match(readme, /Node\.js \*\*22\.6\+\*\*/);
 });
