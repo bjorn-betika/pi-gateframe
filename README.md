@@ -11,27 +11,47 @@ that registers Gateframe as an OpenAI-compatible model provider for
 - pi installed globally (or on your `PATH`).
 - A Gateframe API key.
 
-## Setup
+## Installing the extension
 
-### 1. Set environment variables
+Choose one of:
 
-Both variables are **required**. The extension refuses to register if either
-is unset and prints a warning inside pi.
+### A. Project-local (loaded only from this repo)
+
+Nothing to do — the extension already lives at
+`.pi/extensions/gateframe-provider/`. Just start pi from inside the repo.
+
+### B. User-global (loaded for every pi session)
+
+Copy the extension into pi's global extensions directory:
 
 ```bash
-export GATEFRAME_API_KEY=gf_your_token_here
-export GATEFRAME_BASE_URL=https://your-gateframe-host
+mkdir -p ~/.pi/agent/extensions
+cp -r /path/to/gateframe-pi-integration/.pi/extensions/gateframe-provider \
+      ~/.pi/agent/extensions/
 ```
 
-`GATEFRAME_BASE_URL` is normalized to include `/v1` automatically — setting
-`https://host` and `https://host/v1` are equivalent.
+### C. User-global via symlink (recommended)
 
-> **Security note:** Prefer `https://`. The extension does not reject
-> `http://` URLs, but plain HTTP will send your API key in clear text.
+Keep editing in this repo, have pi see changes everywhere:
 
-### 2. Use a persistent config file (recommended)
+```bash
+mkdir -p ~/.pi/agent/extensions
+ln -s /path/to/gateframe-pi-integration/.pi/extensions/gateframe-provider \
+      ~/.pi/agent/extensions/gateframe-provider
+```
 
-Keep secrets out of your shell rc files:
+After choosing a location you can hot-reload with `/reload` inside pi.
+
+## Configuration
+
+### 1. Provide credentials
+
+Both `GATEFRAME_API_KEY` and `GATEFRAME_BASE_URL` are **required**. The
+extension refuses to register if either is missing and prints a warning
+inside pi.
+
+The extension automatically reads `~/.config/gateframe/conf.env` at
+startup, so you do not need to `source` anything by hand. Example file:
 
 ```bash
 mkdir -p ~/.config/gateframe
@@ -42,15 +62,21 @@ EOF
 chmod 600 ~/.config/gateframe/conf.env
 ```
 
-Then launch pi with:
+Rules:
 
-```bash
-source ~/.config/gateframe/conf.env && pi
-```
+- Supports `KEY=value` and `export KEY=value` lines, single/double quotes,
+  and `#` comments.
+- **Shell-exported variables always win** over the file. If you already
+  have `GATEFRAME_API_KEY` in your shell, that value is used.
+- Override the file location by setting `GATEFRAME_ENV_FILE` to another
+  path.
+- `GATEFRAME_BASE_URL` is normalized to include `/v1` automatically —
+  `https://host` and `https://host/v1` are equivalent.
 
-### 3. Start pi
+> **Security note:** Prefer `https://`. The extension does not reject
+> `http://` URLs, but plain HTTP will send your API key in clear text.
 
-Start pi from this repository so it auto-discovers the extension:
+### 2. Start pi
 
 ```bash
 pi

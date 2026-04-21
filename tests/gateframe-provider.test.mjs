@@ -14,6 +14,8 @@ import extension, {
   registerGateframeProvider,
   defaultGateframeConfig,
   loadModelOverrides,
+  loadEnvFile,
+  applyEnvFileToProcess,
   __resetLastGoodModelsCache,
 } from '../.pi/extensions/gateframe-provider/index.ts';
 
@@ -379,6 +381,107 @@ test('defaultGateframeConfig returns undefined baseUrl when env var is missing',
   assert.equal(config.baseUrl, undefined, 'no default baseUrl — must be explicit');
 });
 
+test('loadEnvFile parses simple KEY=VALUE lines', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gf-env-'));
+  const file = join(dir, 'conf.env');
+  writeFileSync(file, [
+    '# a comment',
+    '',
+    'GATEFRAME_API_KEY=gf_abc',
+    'export GATEFRAME_BASE_URL=https://node2.gateframe.ai',
+    "QUOTED='single quoted value'",
+    'DOUBLE="double quoted value"',
+    'WITH_EQUALS=foo=bar=baz',
+  ].join('\n'));
+
+  try {
+    const { values, error } = loadEnvFile(file);
+    assert.equal(error, undefined);
+    assert.equal(values.GATEFRAME_API_KEY, 'gf_abc');
+    assert.equal(values.GATEFRAME_BASE_URL, 'https://node2.gateframe.ai');
+    assert.equal(values.QUOTED, 'single quoted value');
+    assert.equal(values.DOUBLE, 'double quoted value');
+    assert.equal(values.WITH_EQUALS, 'foo=bar=baz');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadEnvFile returns empty values when file does not exist', () => {
+  const { values, error } = loadEnvFile('/tmp/gf-does-not-exist-12345.env');
+  assert.deepEqual(values, {});
+  assert.equal(error, undefined, 'missing file is not an error, just empty');
+});
+
+test('loadEnvFile reports error for unreadable file (directory)', () => {
+  // Passing a directory will cause readFileSync to throw EISDIR; that is a real error.
+  const dir = mkdtempSync(join(tmpdir(), 'gf-env-'));
+  try {
+    const { values, error } = loadEnvFile(dir);
+    assert.deepEqual(values, {});
+    assert.ok(error, 'should report an error when path is not a readable file');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('applyEnvFileToProcess does not overwrite already-set vars', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gf-env-'));
+  const file = join(dir, 'conf.env');
+  writeFileSync(file, 'GATEFRAME_API_KEY=from_file\nGATEFRAME_BASE_URL=https://from-file');
+
+  const env = { GATEFRAME_API_KEY: 'from_shell' };
+  try {
+    const { applied, skipped } = applyEnvFileToProcess(file, env);
+    assert.equal(env.GATEFRAME_API_KEY, 'from_shell', 'shell value must win');
+    assert.equal(env.GATEFRAME_BASE_URL, 'https://from-file', 'unset value must be filled from file');
+    assert.deepEqual(applied, ['GATEFRAME_BASE_URL']);
+    assert.deepEqual(skipped, ['GATEFRAME_API_KEY']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('default extension loads env file before registering provider', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gf-env-'));
+  const file = join(dir, 'conf.env');
+  writeFileSync(file, [
+    'GATEFRAME_API_KEY=from_file',
+    'GATEFRAME_BASE_URL=http://fromfile.test',
+  ].join('\n'));
+
+  const providerCalls = [];
+  const eventHandlers = {};
+  const fakePi = {
+    on: (event, handler) => { eventHandlers[event] = handler; },
+    registerCommand: () => {},
+    registerProvider: (name, config) => providerCalls.push({ name, config }),
+  };
+
+  extension(fakePi);
+
+  const originalEnv = process.env;
+  process.env = { ...originalEnv, GATEFRAME_ENV_FILE: file };
+  delete process.env.GATEFRAME_API_KEY;
+  delete process.env.GATEFRAME_BASE_URL;
+
+  try {
+    // Use a fetch stub via module-wide override is not available; session_start
+    // will attempt a real fetch. To avoid that, point the file at a URL that
+    // will trigger the fallback branch instead. The key assertion is simply
+    // that the provider is registered at all — which proves env-file loading
+    // succeeded, because without it both required env vars would be missing
+    // and the provider would be skipped.
+    await eventHandlers.session_start({}, { ui: { notify() {} } });
+  } finally {
+    process.env = originalEnv;
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  assert.equal(providerCalls.length, 1, 'provider should be registered after loading env file');
+  assert.equal(providerCalls[0].name, 'gateframe');
+});
+
 test('default extension registers the gateframe provider on session start', async () => {
   const providerCalls = [];
   const eventHandlers = {};
@@ -470,4 +573,6 @@ test('documentation covers required Gateframe setup', async () => {
   assert.match(readme, /\/gateframe-refresh/);
   assert.match(readme, /GATEFRAME_MODEL_OVERRIDES_PATH/);
   assert.match(readme, /Node\.js \*\*22\.6\+\*\*/);
+  assert.match(readme, /~\/\.config\/gateframe\/conf\.env/);
+  assert.match(readme, /~\/\.pi\/agent\/extensions/);
 });

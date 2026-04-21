@@ -1,13 +1,102 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
+const DEFAULT_ENV_FILE = "~/.config/gateframe/conf.env";
 
 export type NotifyLevel = "info" | "success" | "warning" | "error";
 export type NotifyFn = (message: string, level?: NotifyLevel) => void;
+
+/**
+ * Expands a leading `~` or `~/` to the current user's home directory.
+ * Leaves absolute and relative paths untouched otherwise.
+ */
+function expandHome(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return resolve(homedir(), path.slice(2));
+  return path;
+}
+
+/**
+ * Parses a minimal subset of dotenv / POSIX-style env files:
+ * - `KEY=value`
+ * - `export KEY=value`
+ * - single- or double-quoted values (quotes stripped, contents kept verbatim)
+ * - `#` line comments and blank lines
+ *
+ * A missing file is NOT an error (returns empty values). A file that exists
+ * but cannot be read (e.g. a directory, permission denied) IS an error.
+ */
+export function loadEnvFile(path: string): {
+  values: Record<string, string>;
+  error?: string;
+} {
+  const resolved = expandHome(path);
+  try {
+    statSync(resolved);
+  } catch {
+    return { values: {} };
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(resolved, "utf8");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { values: {}, error: `Failed to read env file ${resolved}: ${detail}` };
+  }
+
+  const values: Record<string, string> = {};
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const stripped = line.startsWith("export ") ? line.slice("export ".length).trimStart() : line;
+    const eq = stripped.indexOf("=");
+    if (eq <= 0) continue;
+
+    const key = stripped.slice(0, eq).trim();
+    let value = stripped.slice(eq + 1).trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    values[key] = value;
+  }
+
+  return { values };
+}
+
+/**
+ * Applies values from an env file to the given env object, without
+ * overwriting variables that are already set. Shell-exported vars always
+ * win over file values. Returns which keys were applied and which were
+ * skipped because they were already set.
+ */
+export function applyEnvFileToProcess(
+  path: string,
+  env: Record<string, string | undefined>,
+): { applied: string[]; skipped: string[]; error?: string } {
+  const { values, error } = loadEnvFile(path);
+  const applied: string[] = [];
+  const skipped: string[] = [];
+  for (const [key, value] of Object.entries(values)) {
+    if (env[key] !== undefined && env[key] !== "") {
+      skipped.push(key);
+      continue;
+    }
+    env[key] = value;
+    applied.push(key);
+  }
+  return { applied, skipped, error };
+}
 
 export interface ModelCost {
   input: number;
@@ -273,7 +362,20 @@ export function __resetLastGoodModelsCache() {
 }
 
 export default function (pi: ExtensionAPI) {
+  const loadConfEnv = (notify?: NotifyFn) => {
+    const path = process.env.GATEFRAME_ENV_FILE || DEFAULT_ENV_FILE;
+    const { applied, error } = applyEnvFileToProcess(path, process.env as Record<string, string | undefined>);
+    if (error) {
+      notify?.(error, "warning");
+      return;
+    }
+    if (applied.length > 0) {
+      notify?.(`Loaded ${applied.join(", ")} from ${path}`, "info");
+    }
+  };
+
   const refreshProvider = async (notify?: NotifyFn) => {
+    loadConfEnv(notify);
     await registerGateframeProvider({
       pi,
       env: process.env,
