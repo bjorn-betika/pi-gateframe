@@ -3,11 +3,18 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Pi extension that registers Gateframe as a model provider.",
+  "description": "Pi package that registers Gateframe as a model provider.",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions"]
+  },
   "scripts": {
     "test": "node --test tests/gateframe-provider.test.mjs"
   },
   "engines": {
     "node": ">=22.6"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
   }
 }

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,7 @@ import extension, {
   loadEnvFile,
   applyEnvFileToProcess,
   __resetLastGoodModelsCache,
-} from '../.pi/extensions/gateframe-provider/index.ts';
+} from '../extensions/gateframe-provider.ts';
 
 test.beforeEach(() => {
   __resetLastGoodModelsCache();
@@ -559,6 +560,18 @@ test('gateframe-refresh command re-registers provider and notifies user', async 
   assert.equal(notifications.at(-1)?.[0], 'Gateframe models refreshed.');
 });
 
+test('package metadata exposes a root pi package', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.name, 'gateframe-pi-integration');
+  assert.ok(pkg.keywords.includes('pi-package'));
+  assert.deepEqual(pkg.pi, { extensions: ['./extensions'] });
+  assert.equal(pkg.peerDependencies['@mariozechner/pi-coding-agent'], '*');
+});
+
+test('installable extension entrypoint exists at extensions/gateframe-provider.ts', async () => {
+  await access(new URL('../extensions/gateframe-provider.ts', import.meta.url));
+});
+
 test('documentation covers required Gateframe setup', async () => {
   const [envExample, readme] = await Promise.all([
     readFile(new URL('../.env.example', import.meta.url), 'utf8'),
@@ -568,11 +581,11 @@ test('documentation covers required Gateframe setup', async () => {
   assert.match(envExample, /GATEFRAME_API_KEY=/);
   assert.match(envExample, /GATEFRAME_BASE_URL=/);
   assert.match(envExample, /GATEFRAME_MODEL_OVERRIDES_PATH/);
-  assert.match(readme, /\.pi\/extensions\/gateframe-provider/);
+  assert.match(readme, /pi install git:/);
+  assert.match(readme, /pi install \/absolute\/path\/to\/package/);
   assert.match(readme, /\/model/);
   assert.match(readme, /\/gateframe-refresh/);
   assert.match(readme, /GATEFRAME_MODEL_OVERRIDES_PATH/);
   assert.match(readme, /Node\.js \*\*22\.6\+\*\*/);
   assert.match(readme, /~\/\.config\/gateframe\/conf\.env/);
-  assert.match(readme, /~\/\.pi\/agent\/extensions/);
 });

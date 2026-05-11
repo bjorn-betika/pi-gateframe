@@ -1,8 +1,7 @@
 # Gateframe pi integration
 
-This repo ships a project-local pi extension at `.pi/extensions/gateframe-provider`
-that registers Gateframe as an OpenAI-compatible model provider for
-[pi](https://github.com/badlogic/pi-mono).
+This repo is a **Pi package** that registers Gateframe as an OpenAI-compatible
+model provider for [pi](https://github.com/badlogic/pi-mono).
 
 ## Requirements
 
@@ -11,36 +10,44 @@ that registers Gateframe as an OpenAI-compatible model provider for
 - pi installed globally (or on your `PATH`).
 - A Gateframe API key.
 
-## Installing the extension
+## Installing the package
 
-Choose one of:
+### Recommended: install from git with pi
 
-### A. Project-local (loaded only from this repo)
-
-Nothing to do — the extension already lives at
-`.pi/extensions/gateframe-provider/`. Just start pi from inside the repo.
-
-### B. User-global (loaded for every pi session)
-
-Copy the extension into pi's global extensions directory:
+Once this repo is pushed to GitHub, users can install it globally with:
 
 ```bash
-mkdir -p ~/.pi/agent/extensions
-cp -r /path/to/gateframe-pi-integration/.pi/extensions/gateframe-provider \
-      ~/.pi/agent/extensions/
+pi install git:github.com/<user>/gateframe-pi-integration
 ```
 
-### C. User-global via symlink (recommended)
-
-Keep editing in this repo, have pi see changes everywhere:
+Or via HTTPS:
 
 ```bash
-mkdir -p ~/.pi/agent/extensions
-ln -s /path/to/gateframe-pi-integration/.pi/extensions/gateframe-provider \
-      ~/.pi/agent/extensions/gateframe-provider
+pi install https://github.com/<user>/gateframe-pi-integration
 ```
 
-After choosing a location you can hot-reload with `/reload` inside pi.
+Pi will clone the repo, read the root `package.json`, and load the
+extension from `./extensions`.
+
+### Local install for testing
+
+Install directly from a local checkout without copying files around:
+
+```bash
+pi install /absolute/path/to/package
+```
+
+From this repo, that means:
+
+```bash
+pi install $(pwd)
+```
+
+### Manual project-local use
+
+If you do not want to use `pi install`, starting pi from this repo still
+works because the implementation remains available under
+`.pi/extensions/gateframe-provider/` for local development.
 
 ## Configuration
 
