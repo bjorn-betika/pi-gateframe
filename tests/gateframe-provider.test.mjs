@@ -582,6 +582,7 @@ test('documentation covers required Gateframe setup', async () => {
   assert.match(envExample, /GATEFRAME_BASE_URL=/);
   assert.match(envExample, /GATEFRAME_MODEL_OVERRIDES_PATH/);
   assert.match(readme, /pi install git:/);
+  assert.match(readme, /pi install \$\(pwd\)/);
   assert.match(readme, /pi install \/absolute\/path\/to\/package/);
   assert.match(readme, /\/model/);
   assert.match(readme, /\/gateframe-refresh/);

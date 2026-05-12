@@ -12,7 +12,27 @@ model provider for [pi](https://github.com/badlogic/pi-mono).
 
 ## Installing the package
 
-### Recommended: install from git with pi
+### Local install for testing
+
+The simplest way to make the extension follow you across directories is to
+install this repo once as a **global Pi package**:
+
+```bash
+cd /Users/bjornb/Code/bjorn/gateframe-pi-integration
+pi install $(pwd)
+```
+
+You can also install it by absolute path from anywhere:
+
+```bash
+pi install /absolute/path/to/package
+```
+
+After that, start `pi` from **any folder** and the Gateframe package should
+still load, because `pi install` writes to your global Pi settings by
+default.
+
+### Install from git with pi
 
 Once this repo is pushed to GitHub, users can install it globally with:
 
@@ -28,20 +48,6 @@ pi install https://github.com/<user>/gateframe-pi-integration
 
 Pi will clone the repo, read the root `package.json`, and load the
 extension from `./extensions`.
-
-### Local install for testing
-
-Install directly from a local checkout without copying files around:
-
-```bash
-pi install /absolute/path/to/package
-```
-
-From this repo, that means:
-
-```bash
-pi install $(pwd)
-```
 
 ### Manual project-local use
 
