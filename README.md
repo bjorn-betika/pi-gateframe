@@ -37,13 +37,13 @@ default.
 Once this repo is pushed to GitHub, users can install it globally with:
 
 ```bash
-pi install git:github.com/bjorn-betika/gateframe-pi-integration
+pi install git:github.com/bjorn-betika/pi-gateframe
 ```
 
 Or via HTTPS:
 
 ```bash
-pi install https://github.com/bjorn-betika/gateframe-pi-integration
+pi install https://github.com/bjorn-betika/pi-gateframe
 ```
 
 Pi will clone the repo, read the root `package.json`, and load the
