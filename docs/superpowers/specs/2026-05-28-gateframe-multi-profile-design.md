@@ -79,10 +79,19 @@ Config file changes are **not** auto-detected. Users run `/gateframe-refresh` to
 
 There is **no `active` field in the file**. The active profile is stored in-memory per pi instance. This allows multiple instances to have different active profiles simultaneously.
 
+### Startup behavior
+
+On `session_start`, the extension determines which profile to activate:
+
+1. If `profiles.json` does not exist or contains no profiles → fall back to single-key behavior (current behavior using `GATEFRAME_API_KEY` + `GATEFRAME_BASE_URL`).
+2. If `profiles.json` contains one or more enabled profiles → auto-activate the **first enabled profile** (in file declaration order). Run the standard activation flow (discovery + validation + provider registration).
+3. If `profiles.json` exists but all profiles are disabled → warn "all profiles are disabled" and do not register a provider.
+4. If the auto-activated profile's discovery fails → warn and fall back to the next enabled profile. If all fail, warn and leave the provider unregistered.
+
 ### In-memory per-instance state
 
 - `activeProfile: string | undefined` — name of the currently active profile.
-- `cachedModels: Map<string, ProfileModel[]>` — last successfully discovered-and-validated models per profile name. Cleared on `/gateframe-refresh`.
+- `cachedModels: Map<string, ProfileModel[]>` — last successfully discovered-and-validated models per profile name. Used as fallback display data when discovery fails on refresh (same behavior as the existing `lastGoodModelsByBaseUrl` cache). Cleared on `/gateframe-refresh`.
 
 ## Backward Compatibility
 
@@ -117,8 +126,9 @@ Used by `/gateframe-use`, `/gateframe-profile add`, and the `/gateframe-profiles
 5. Normalize base URL via `normalizeBaseUrl()` (ensures `/v1` suffix, strips trailing slashes). The normalized value is used as the provider's `baseUrl` for pi registration.
 6. Call `GET {normalizedBaseUrl}/models` with `Authorization: Bearer {apiKey}`. Note: the `/v1` is already part of `normalizedBaseUrl`, so the full discovery path is `{normalizedBaseUrl}/models` (e.g. `https://router.gateframe.ai/v1/models`). Pi's provider will append `/chat/completions` to the same base.
 7. Intersect declared `models` against the `data[].id` values in the discovery response.
+7a. Pass the profile's **literal `apiKey` value** to pi's provider registration (not an env var reference). The current implementation uses `apiKey: "GATEFRAME_API_KEY"` which references the env var name; profile mode must pass the actual key string so that pi's HTTP requests to `/v1/chat/completions` use the correct profile's credentials.
 8. Warn about any declared models that were not in the discovery response.
-9. If at least one valid model remains → re-register provider with those models (replaces existing `gateframe` provider).
+9. If at least one valid model remains → re-register provider with those models and the profile's literal `apiKey` (replaces existing `gateframe` provider). Pi uses this key for all subsequent chat completion requests under this profile.
 10. If zero valid models → warn "no accessible models for profile X" and do not register.
 
 ### Deactivation flow
