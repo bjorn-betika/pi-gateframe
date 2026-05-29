@@ -112,7 +112,7 @@ On `session_start`, the extension determines which profile to activate:
 | `/gateframe-profile enable <name>` | Sets `enabled: true` in file. Makes it available in picker. |
 | `/gateframe-profile disable <name>` | Sets `enabled: false` in file. If currently active, deactivates the provider. |
 | `/gateframe-refresh` | Re-reads profiles file from disk, then re-validates and re-registers the active profile's models. Also picks up config edits made by other instances. |
-| `/gateframe-models` | Shows the currently active profile's validated model list (what is in `/model` right now). |
+| `/gateframe-models` | Shows the currently active profile's validated model list from in-memory state (what is in `/model` right now). Does not re-read the profiles file or re-run discovery. |
 | `/gateframe-init` | Reads the current `GATEFRAME_API_KEY` and `GATEFRAME_BASE_URL` (from env or `conf.env`), calls `/v1/models` to discover all accessible models, and creates a `default` profile containing the key, base URL, and all discovered model IDs. If discovery fails, uses the static fallback model list. Refuses to overwrite an existing `profiles.json`. |
 
 ### Activation flow
@@ -130,6 +130,8 @@ Used by `/gateframe-use`, `/gateframe-profile add`, and the `/gateframe-profiles
 8. Warn about any declared models that were not in the discovery response.
 9. If at least one valid model remains → re-register provider with those models and the profile's literal `apiKey` (replaces existing `gateframe` provider). Pi uses this key for all subsequent chat completion requests under this profile.
 10. If zero valid models → warn "no accessible models for profile X" and do not register.
+11. New profiles created via `add` are written with `enabled: true`.
+12. Write commands (`add`, `remove`, `edit`, `enable`, `disable`, `init`) refuse to write if `profiles.json` is malformed JSON — warn the user to repair the file rather than risk overwriting with a new file that drops existing profiles.
 
 ### Deactivation flow
 
