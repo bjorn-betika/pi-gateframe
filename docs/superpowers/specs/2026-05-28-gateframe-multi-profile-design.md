@@ -91,7 +91,7 @@ On `session_start`, the extension determines which profile to activate:
 ### In-memory per-instance state
 
 - `activeProfile: string | undefined` — name of the currently active profile.
-- `cachedModels: Map<string, ProfileModel[]>` — last successfully discovered-and-validated models per profile name. Used as fallback display data when discovery fails on refresh (same behavior as the existing `lastGoodModelsByBaseUrl` cache). Cleared on `/gateframe-refresh`.
+- `cachedModels: Map<string, ProfileModel[]>` — last successfully discovered-and-validated models per profile name. Used as fallback when discovery fails on refresh (same behavior as the existing `lastGoodModelsByBaseUrl` cache). Updated (not cleared) on successful `/gateframe-refresh` — the old cache entry is replaced only after new models are successfully discovered.
 
 ## Backward Compatibility
 
@@ -113,7 +113,7 @@ On `session_start`, the extension determines which profile to activate:
 | `/gateframe-profile disable <name>` | Sets `enabled: false` in file. If currently active, deactivates the provider. |
 | `/gateframe-refresh` | Re-reads profiles file from disk, then re-validates and re-registers the active profile's models. Also picks up config edits made by other instances. |
 | `/gateframe-models` | Shows the currently active profile's validated model list (what is in `/model` right now). |
-| `/gateframe-init` | Reads the current `GATEFRAME_API_KEY` and `GATEFRAME_BASE_URL` (from env or `conf.env`) and creates a `default` profile in `profiles.json`. Refuses to overwrite an existing file. |
+| `/gateframe-init` | Reads the current `GATEFRAME_API_KEY` and `GATEFRAME_BASE_URL` (from env or `conf.env`), calls `/v1/models` to discover all accessible models, and creates a `default` profile containing the key, base URL, and all discovered model IDs. If discovery fails, uses the static fallback model list. Refuses to overwrite an existing `profiles.json`. |
 
 ### Activation flow
 
