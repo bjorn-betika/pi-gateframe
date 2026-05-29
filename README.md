@@ -18,14 +18,9 @@ The simplest way to make the extension follow you across directories is to
 install this repo once as a **global Pi package**:
 
 ```bash
-cd /Users/bjornb/Code/bjorn/gateframe-pi-integration
+git clone git@github.com:bjorn-betika/pi-gateframe.git
+cd pi-gateframe
 pi install $(pwd)
-```
-
-You can also install it by absolute path from anywhere:
-
-```bash
-pi install /absolute/path/to/package
 ```
 
 After that, start `pi` from **any folder** and the Gateframe package should
