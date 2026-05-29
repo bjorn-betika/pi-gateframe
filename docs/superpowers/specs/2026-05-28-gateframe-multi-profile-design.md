@@ -173,7 +173,10 @@ A convenience command is provided for users migrating from single-key setup:
 | Some declared models fail discovery | Warn "models not accessible: [list]", register provider with the models that worked. |
 | Profiles file is malformed JSON | Warn "profiles file is malformed", fall back to current in-memory state (if any) or single-key behavior. |
 | Active profile is disabled/removed by another instance | Not detected until next action in this instance. User runs `/gateframe-refresh` to pick up the change. |
-| `baseUrl` unreachable | Discovery timeout (10s) → warn "could not reach Gateframe at {url}", do not register. |
+| `baseUrl` unreachable on initial activation | Discovery timeout (10s) → warn "could not reach Gateframe at {url}", do not register. |
+| `baseUrl` unreachable on `/gateframe-refresh` | Discovery timeout → warn, keep the current provider registered with the existing cached models. Do not unregister. |
+| Active profile was removed from file by another instance | `/gateframe-refresh` detects the active profile is missing → deactivate provider, warn "active profile was removed". Do not auto-switch to another profile. |
+| Active profile was disabled by another instance | `/gateframe-refresh` detects `enabled: false` → deactivate provider, warn "active profile was disabled". Do not auto-switch to another profile. |
 | No profiles file, no env vars | Same as today: warn about missing `GATEFRAME_API_KEY` and `GATEFRAME_BASE_URL`. |
 | Profile name contains special characters | Reject names that are not `[a-zA-Z0-9_-]+`. |
 | Duplicate profile name on `add` | Reject with "profile already exists". Use `edit` to modify. |
