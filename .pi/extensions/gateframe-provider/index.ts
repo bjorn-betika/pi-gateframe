@@ -4,6 +4,24 @@ import { resolve } from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+import {
+  startupActivateProfile,
+  handleProfileAdd,
+  handleProfileRemove,
+  handleProfileEdit,
+  handleProfileEnable,
+  handleProfileDisable,
+  handleProfileUse,
+  handleProfileList,
+  handleModelsList,
+  handleInit,
+  handleRefresh,
+  getActiveProfile,
+  readProfilesFile,
+  DEFAULT_PROFILES_PATH,
+  DEFAULT_BASE_URL,
+} from "./profiles.ts";
+
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
@@ -374,27 +392,279 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  const refreshProvider = async (notify?: NotifyFn) => {
-    loadConfEnv(notify);
-    await registerGateframeProvider({
-      pi,
-      env: process.env,
-      notify,
-    });
-  };
+  const getProfilesPath = () =>
+    process.env.GATEFRAME_PROFILES_PATH || DEFAULT_PROFILES_PATH;
 
   const toCtxNotify = (ctx: { ui?: { notify?: (message: string, level?: string) => void } }): NotifyFn =>
     (message, level) => ctx.ui?.notify?.(message, level);
 
+  // -----------------------------------------------------------------------
+  // session_start: load env, then activate profile or fall back to single-key
+  // -----------------------------------------------------------------------
+
   pi.on("session_start", async (_event, ctx) => {
-    await refreshProvider(toCtxNotify(ctx));
+    const notify = toCtxNotify(ctx);
+    loadConfEnv(notify);
+    await startupActivateProfile({
+      profilesPath: getProfilesPath(),
+      pi,
+      env: process.env,
+      notify,
+    });
   });
 
+  // -----------------------------------------------------------------------
+  // Commands
+  // -----------------------------------------------------------------------
+
   pi.registerCommand("gateframe-refresh", {
-    description: "Refresh Gateframe model discovery",
+    description: "Refresh Gateframe models (re-reads profiles file and re-validates active profile)",
     handler: async (_args, ctx) => {
-      await refreshProvider(toCtxNotify(ctx));
-      ctx.ui?.notify?.("Gateframe models refreshed.", "success");
+      const notify = toCtxNotify(ctx);
+      loadConfEnv(notify);
+      const result = await handleRefresh({
+        profilesPath: getProfilesPath(),
+        pi,
+        env: process.env,
+        notify,
+      });
+      if (result.success) {
+        ctx.ui?.notify?.("Gateframe models refreshed.", "success");
+      } else {
+        ctx.ui?.notify?.(result.error ?? "Refresh failed.", "error");
+      }
+    },
+  });
+
+  pi.registerCommand("gateframe-profiles", {
+    description: "Switch to a Gateframe profile (interactive picker)",
+    handler: async (_args, ctx) => {
+      const notify = toCtxNotify(ctx);
+      loadConfEnv(notify);
+      const { profiles } = handleProfileList({ profilesPath: getProfilesPath() });
+      const enabled = profiles.filter((p) => p.enabled);
+
+      if (enabled.length === 0) {
+        ctx.ui?.notify?.("No enabled Gateframe profiles.", "warning");
+        return;
+      }
+
+      const active = getActiveProfile();
+      const labels = enabled.map((p) => {
+        const marker = p.name === active ? " (active)" : "";
+        return `${p.name}${marker} — ${p.modelCount} models`;
+      });
+
+      const choice = await ctx.ui?.select?.("Select a Gateframe profile:", labels);
+      if (!choice) return;
+
+      const selectedName = enabled.find((p) => choice.startsWith(p.name))?.name;
+      if (!selectedName) return;
+
+      const result = await handleProfileUse({
+        profilesPath: getProfilesPath(),
+        name: selectedName,
+        pi,
+        env: process.env,
+        notify,
+      });
+      if (result.success) {
+        ctx.ui?.notify?.(`Switched to profile "${selectedName}".`, "success");
+      } else {
+        ctx.ui?.notify?.(result.error ?? "Failed to switch profile.", "error");
+      }
+    },
+  });
+
+  pi.registerCommand("gateframe-use", {
+    description: "Switch to a named Gateframe profile: /gateframe-use <name>",
+    handler: async (args, ctx) => {
+      const name = args.trim();
+      if (!name) {
+        ctx.ui?.notify?.("Usage: /gateframe-use <profile-name>", "warning");
+        return;
+      }
+      const notify = toCtxNotify(ctx);
+      loadConfEnv(notify);
+      const result = await handleProfileUse({
+        profilesPath: getProfilesPath(),
+        name,
+        pi,
+        env: process.env,
+        notify,
+      });
+      if (result.success) {
+        ctx.ui?.notify?.(`Switched to profile "${name}".`, "success");
+      } else {
+        ctx.ui?.notify?.(result.error ?? "Failed to switch profile.", "error");
+      }
+    },
+  });
+
+  pi.registerCommand("gateframe-profile", {
+    description: "Manage Gateframe profiles: add <name>, remove <name>, edit <name>, enable <name>, disable <name>",
+    getArgumentCompletions: (prefix: string) => {
+      const subcommands = ["add", "remove", "edit", "enable", "disable"];
+      return subcommands
+        .filter((s) => s.startsWith(prefix.split(" ")[0] ?? ""))
+        .map((s) => ({ label: s }));
+    },
+    handler: async (args, ctx) => {
+      const parts = args.trim().split(/\s+/);
+      const sub = parts[0];
+      const name = parts[1];
+      const notify = toCtxNotify(ctx);
+      loadConfEnv(notify);
+      const profilesPath = getProfilesPath();
+
+      if (sub === "add") {
+        if (!name) {
+          ctx.ui?.notify?.("Usage: /gateframe-profile add <name>", "warning");
+          return;
+        }
+
+        const apiKey = await ctx.ui?.input?.("API key:", "gf_...");
+        if (!apiKey) return;
+
+        const baseUrlInput = await ctx.ui?.input?.("Base URL (leave empty for default):", "https://router.gateframe.ai");
+        const baseUrl = baseUrlInput?.trim() || undefined;
+
+        // Discover available models for this key
+        const resolvedBase = normalizeBaseUrl(baseUrl ?? process.env.GATEFRAME_BASE_URL ?? DEFAULT_BASE_URL);
+        let discoveredIds: string[] = [];
+        try {
+          const resp = await fetch(`${resolvedBase}/models`, {
+            headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+          });
+          if (resp.ok) {
+            const payload = (await resp.json()) as { data?: unknown[] };
+            discoveredIds = Array.isArray(payload.data)
+              ? payload.data
+                  .filter(
+                    (m): m is { id: string } =>
+                      !!m && typeof m === "object" && typeof (m as { id?: unknown }).id === "string",
+                  )
+                  .map((m) => m.id)
+              : [];
+          }
+        } catch {
+          ctx.ui?.notify?.("Could not discover models. Add model IDs manually.", "warning");
+        }
+
+        let models: string[];
+        if (discoveredIds.length > 0) {
+          const selected = await ctx.ui?.select?.("Select models:", discoveredIds);
+          models = selected ? [selected] : [];
+        } else {
+          const modelsInput = await ctx.ui?.input?.(
+            "Model IDs (comma-separated):",
+            "gateframe/opus-4.7, gateframe/qwen-3.6",
+          );
+          models = modelsInput?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
+        }
+
+        if (models.length === 0) {
+          ctx.ui?.notify?.("No models selected. Profile not created.", "warning");
+          return;
+        }
+
+        const result = await handleProfileAdd({
+          profilesPath, name, apiKey, baseUrl, models,
+          pi, env: process.env, notify,
+        });
+        if (result.success) {
+          ctx.ui?.notify?.(`Profile "${name}" created and activated.`, "success");
+        } else {
+          ctx.ui?.notify?.(result.error ?? "Failed to create profile.", "error");
+        }
+      } else if (sub === "remove") {
+        if (!name) { ctx.ui?.notify?.("Usage: /gateframe-profile remove <name>", "warning"); return; }
+        const result = handleProfileRemove({ profilesPath, name, pi, notify });
+        if (result.success) {
+          ctx.ui?.notify?.(`Profile "${name}" removed.`, "success");
+        } else {
+          ctx.ui?.notify?.(result.error ?? "Failed to remove profile.", "error");
+        }
+      } else if (sub === "edit") {
+        if (!name) { ctx.ui?.notify?.("Usage: /gateframe-profile edit <name>", "warning"); return; }
+
+        const { profiles } = readProfilesFile(profilesPath);
+        const existing = profiles[name];
+        if (!existing) {
+          ctx.ui?.notify?.(`Profile "${name}" not found.`, "error");
+          return;
+        }
+
+        const apiKey = await ctx.ui?.input?.("API key (leave empty to keep current):", existing.apiKey);
+        const baseUrlInput = await ctx.ui?.input?.("Base URL (leave empty to keep current):", existing.baseUrl ?? "");
+        const modelsInput = await ctx.ui?.input?.("Models (comma-separated, leave empty to keep current):", existing.models.join(", "));
+
+        const result = await handleProfileEdit({
+          profilesPath, name,
+          apiKey: apiKey?.trim() || undefined,
+          baseUrl: baseUrlInput?.trim() || undefined,
+          models: modelsInput?.trim() ? modelsInput.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+          pi, env: process.env, notify,
+        });
+        if (result.success) {
+          ctx.ui?.notify?.(`Profile "${name}" updated.`, "success");
+        } else {
+          ctx.ui?.notify?.(result.error ?? "Failed to update profile.", "error");
+        }
+      } else if (sub === "enable") {
+        if (!name) { ctx.ui?.notify?.("Usage: /gateframe-profile enable <name>", "warning"); return; }
+        const result = handleProfileEnable({ profilesPath, name });
+        if (result.success) {
+          ctx.ui?.notify?.(`Profile "${name}" enabled.`, "success");
+        } else {
+          ctx.ui?.notify?.(result.error ?? "Failed to enable profile.", "error");
+        }
+      } else if (sub === "disable") {
+        if (!name) { ctx.ui?.notify?.("Usage: /gateframe-profile disable <name>", "warning"); return; }
+        const result = handleProfileDisable({ profilesPath, name, pi, notify });
+        if (result.success) {
+          ctx.ui?.notify?.(`Profile "${name}" disabled.`, "success");
+        } else {
+          ctx.ui?.notify?.(result.error ?? "Failed to disable profile.", "error");
+        }
+      } else {
+        ctx.ui?.notify?.("Usage: /gateframe-profile <add|remove|edit|enable|disable> <name>", "warning");
+      }
+    },
+  });
+
+  pi.registerCommand("gateframe-models", {
+    description: "Show currently active Gateframe profile and its validated models",
+    handler: async (_args, ctx) => {
+      const { activeProfile: active, models } = handleModelsList();
+      if (!active) {
+        ctx.ui?.notify?.("No active Gateframe profile.", "info");
+        return;
+      }
+      const lines = [
+        `Active profile: ${active}`,
+        `Models:`,
+        ...models.map((m) => `  - ${m.id}`),
+      ];
+      ctx.ui?.notify?.(lines.join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("gateframe-init", {
+    description: "Create profiles.json from current GATEFRAME_API_KEY and GATEFRAME_BASE_URL",
+    handler: async (_args, ctx) => {
+      const notify = toCtxNotify(ctx);
+      loadConfEnv(notify);
+      const result = await handleInit({
+        profilesPath: getProfilesPath(),
+        env: process.env,
+        notify,
+      });
+      if (result.success) {
+        ctx.ui?.notify?.(`Profiles file created at ${getProfilesPath()}.`, "success");
+      } else {
+        ctx.ui?.notify?.(result.error ?? "Failed to initialize profiles.", "error");
+      }
     },
   });
 }

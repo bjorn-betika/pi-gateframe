@@ -9,7 +9,7 @@
     "extensions": ["./extensions"]
   },
   "scripts": {
-    "test": "node --test tests/gateframe-provider.test.mjs"
+    "test": "node --test tests/gateframe-provider.test.mjs tests/gateframe-profiles.test.mjs"
   },
   "engines": {
     "node": ">=22.6"
