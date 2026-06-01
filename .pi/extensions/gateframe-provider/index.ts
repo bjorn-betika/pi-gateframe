@@ -603,11 +603,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("gateframe-profile", {
     description: "Manage Gateframe profiles: add <name>, remove <name>, edit <name>, enable <name>, disable <name>",
     getArgumentCompletions: (prefix: string) => {
+      // Only suggest subcommands when no space is present — i.e. the user
+      // is still on the first token. Once they've typed a subcommand and
+      // a space, we stop providing completions so the name field isn't
+      // overwritten.
+      if (prefix.includes(" ")) return null;
       const subcommands = ["add", "remove", "edit", "enable", "disable"];
-      const first = prefix.split(" ")[0] ?? "";
       return subcommands
-        .filter((s) => s.startsWith(first))
-        .map((s) => ({ value: s, label: s }));
+        .filter((s) => s.startsWith(prefix))
+        .map((s) => ({ value: s + " ", label: s }));
     },
     handler: async (args, ctx) => {
       const parts = args.trim().split(/\s+/);
