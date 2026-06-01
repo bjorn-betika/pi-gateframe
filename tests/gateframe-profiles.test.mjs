@@ -329,7 +329,7 @@ describe('startupActivateProfile', () => {
 
     assert.equal(result.mode, 'single-key');
     assert.equal(providerCalls.length, 1);
-    assert.equal(providerCalls[0].config.apiKey, 'GATEFRAME_API_KEY');
+    assert.equal(providerCalls[0].config.apiKey, '$GATEFRAME_API_KEY');
   });
 
   it('activates first enabled profile when profiles exist', async () => {
