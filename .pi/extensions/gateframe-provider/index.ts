@@ -18,6 +18,7 @@ import {
   handleRefresh,
   getActiveProfile,
   readProfilesFile,
+  resolveBaseUrl,
   DEFAULT_PROFILES_PATH,
   DEFAULT_BASE_URL,
 } from "./profiles.ts";
@@ -125,6 +126,11 @@ export interface ModelCost {
 
 export interface ModelOverride {
   name?: string;
+  /** Override which HTTP API endpoint to use for this model.
+   * - `"openai-completions"`: POST /v1/chat/completions (default for most models)
+   * - `"openai-responses"`:  POST /v1/responses (required for models like gpt-5.4 with reasoning_effort)
+   */
+  api?: "openai-completions" | "openai-responses";
   reasoning?: boolean;
   input?: readonly ("text" | "image")[];
   cost?: Partial<ModelCost>;
@@ -162,6 +168,9 @@ export const KNOWN_MODEL_DEFAULTS: ModelOverrides = {
     maxTokens: 8_192,
   },
   "gateframe/chatgpt-5.4": {
+    // gpt-5.4 requires the /v1/responses endpoint — it rejects function tools
+    // with reasoning_effort on /v1/chat/completions (HTTP 502).
+    api: "openai-responses",
     reasoning: true,
     contextWindow: 128_000,
     maxTokens: 16_384,
@@ -217,12 +226,18 @@ export function mapGateframeModel(model: { id: string }, overrides: ModelOverrid
     contextWindow: merged.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: merged.maxTokens ?? DEFAULT_MAX_TOKENS,
   };
+  // Per-model API override: some Gateframe models (e.g. gateframe/chatgpt-5.4)
+  // require /v1/responses instead of /v1/chat/completions.
+  if (merged.api) {
+    result.api = merged.api;
+  }
   if (merged.compat && Object.keys(merged.compat).length > 0) {
     result.compat = merged.compat;
   }
   return result as {
     id: string;
     name: string;
+    api?: "openai-completions" | "openai-responses";
     reasoning: boolean;
     input: readonly ("text" | "image")[];
     cost: ModelCost;
@@ -368,10 +383,90 @@ export async function registerGateframeProvider({
 
   pi.registerProvider("gateframe", {
     baseUrl: config.baseUrl,
-    apiKey: "GATEFRAME_API_KEY",
+    apiKey: "$GATEFRAME_API_KEY",
+    // Default API for models that don't carry a per-model override.
+    // Models requiring /v1/responses (e.g. gateframe/chatgpt-5.4) carry
+    // `api: "openai-responses"` on their model entry from mapGateframeModel.
     api: "openai-completions",
     models,
   });
+}
+
+export function registerInitialGateframeProvider({
+  pi,
+  env,
+  profilesPath = DEFAULT_PROFILES_PATH,
+  notify = () => {},
+}: {
+  pi: { registerProvider: (name: string, config: Record<string, unknown>) => void };
+  env: Record<string, string | undefined>;
+  profilesPath?: string;
+  notify?: NotifyFn;
+}): boolean {
+  const { overrides, error: overridesError } = loadModelOverrides(env);
+  if (overridesError) {
+    notify(overridesError, "warning");
+  }
+
+  const { profiles, error: profilesError } = readProfilesFile(profilesPath);
+  if (profilesError) {
+    notify(profilesError, "warning");
+  }
+
+  const profileNames = Object.keys(profiles);
+  if (profileNames.length > 0) {
+    const enabledName = profileNames.find((name) => profiles[name].enabled);
+    if (!enabledName) {
+      notify("All Gateframe profiles are disabled.", "warning");
+      return false;
+    }
+
+    const profile = profiles[enabledName];
+    if (!profile.apiKey) {
+      notify(`Profile "${enabledName}" is missing an API key.`, "warning");
+      return false;
+    }
+
+    const models = profile.models.length > 0
+      ? profile.models.map((id) => mapGateframeModel({ id }, overrides))
+      : getFallbackModels(overrides);
+
+    pi.registerProvider("gateframe", {
+      baseUrl: resolveBaseUrl(profile, env),
+      apiKey: profile.apiKey,
+      api: "openai-completions",
+      models,
+    });
+    return true;
+  }
+
+  const config = defaultGateframeConfig(env);
+  if (!config.apiKey || !config.baseUrl) {
+    return false;
+  }
+
+  pi.registerProvider("gateframe", {
+    baseUrl: config.baseUrl,
+    apiKey: "$GATEFRAME_API_KEY",
+    api: "openai-completions",
+    models: getFallbackModels(overrides),
+  });
+  return true;
+}
+
+/**
+ * Returns the set of model IDs (based on KNOWN_MODEL_DEFAULTS and any
+ * overrides) that are routed to the /v1/responses endpoint.
+ * Useful for informational display and tests.
+ */
+export function getResponsesApiModelIds(overrides: ModelOverrides = {}): Set<string> {
+  const ids = new Set<string>();
+  const allIds = new Set([...Object.keys(KNOWN_MODEL_DEFAULTS), ...Object.keys(overrides)]);
+  for (const id of allIds) {
+    const merged = { ...KNOWN_MODEL_DEFAULTS[id], ...overrides[id] };
+    if (merged.api === "openai-responses") ids.add(id);
+  }
+  return ids;
 }
 
 /** Test-only: clear the last-good-models memoization between tests. */
@@ -401,6 +496,13 @@ export default function (pi: ExtensionAPI) {
   // -----------------------------------------------------------------------
   // session_start: load env, then activate profile or fall back to single-key
   // -----------------------------------------------------------------------
+
+  loadConfEnv();
+  registerInitialGateframeProvider({
+    profilesPath: getProfilesPath(),
+    pi,
+    env: process.env,
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     const notify = toCtxNotify(ctx);

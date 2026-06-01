@@ -17,6 +17,7 @@ import extension, {
   loadModelOverrides,
   loadEnvFile,
   applyEnvFileToProcess,
+  getResponsesApiModelIds,
   __resetLastGoodModelsCache,
 } from '../extensions/gateframe-provider.ts';
 
@@ -479,8 +480,44 @@ test('default extension loads env file before registering provider', async () =>
     rmSync(dir, { recursive: true, force: true });
   }
 
-  assert.equal(providerCalls.length, 1, 'provider should be registered after loading env file');
+  assert.equal(providerCalls.length, 2, 'provider should be registered during load and after session_start');
   assert.equal(providerCalls[0].name, 'gateframe');
+});
+
+test('default extension registers fallback gateframe models during extension load', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gf-env-'));
+  const file = join(dir, 'conf.env');
+  writeFileSync(file, [
+    'GATEFRAME_API_KEY=from_file',
+    'GATEFRAME_BASE_URL=http://fromfile.test',
+  ].join('\n'));
+
+  const providerCalls = [];
+  const fakePi = {
+    on: () => {},
+    registerCommand: () => {},
+    registerProvider: (name, config) => providerCalls.push({ name, config }),
+  };
+
+  const originalEnv = process.env;
+  process.env = { ...originalEnv, GATEFRAME_ENV_FILE: file };
+  delete process.env.GATEFRAME_API_KEY;
+  delete process.env.GATEFRAME_BASE_URL;
+
+  try {
+    extension(fakePi);
+  } finally {
+    process.env = originalEnv;
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls[0].name, 'gateframe');
+  assert.equal(providerCalls[0].config.baseUrl, 'http://fromfile.test/v1');
+  assert.ok(
+    providerCalls[0].config.models.some(m => m.id === 'gateframe/chatgpt-5.4'),
+    'initial fallback registration should include gateframe/chatgpt-5.4',
+  );
 });
 
 test('default extension registers the gateframe provider on session start', async () => {
@@ -517,8 +554,9 @@ test('default extension registers the gateframe provider on session start', asyn
   }
 
   assert.equal(typeof commands['gateframe-refresh']?.handler, 'function');
-  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls.length, 2);
   assert.equal(providerCalls[0].name, 'gateframe');
+  assert.equal(providerCalls[1].name, 'gateframe');
 });
 
 test('gateframe-refresh command re-registers provider and notifies user', async () => {
@@ -555,8 +593,9 @@ test('gateframe-refresh command re-registers provider and notifies user', async 
     process.env = originalEnv;
   }
 
-  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls.length, 2);
   assert.equal(providerCalls[0].name, 'gateframe');
+  assert.equal(providerCalls[1].name, 'gateframe');
   assert.equal(notifications.at(-1)?.[0], 'Gateframe models refreshed.');
 });
 
@@ -589,4 +628,74 @@ test('documentation covers required Gateframe setup', async () => {
   assert.match(readme, /GATEFRAME_MODEL_OVERRIDES_PATH/);
   assert.match(readme, /Node\.js \*\*22\.6\+\*\*/);
   assert.match(readme, /~\/\.config\/gateframe\/conf\.env/);
+});
+
+// ---------------------------------------------------------------------------
+// Per-model /v1/responses API routing
+// ---------------------------------------------------------------------------
+
+test('mapGateframeModel sets api: "openai-responses" for gateframe/chatgpt-5.4', () => {
+  const model = mapGateframeModel({ id: 'gateframe/chatgpt-5.4' });
+  assert.equal(model.api, 'openai-responses',
+    'chatgpt-5.4 must use /v1/responses because it rejects function tools with reasoning_effort on /v1/chat/completions');
+});
+
+test('mapGateframeModel leaves api undefined for completions-compatible models', () => {
+  for (const id of ['gateframe/opus-4.7', 'gateframe/qwen-3.6', 'gateframe/minimax-2.7', 'gateframe/glm-5.1']) {
+    const model = mapGateframeModel({ id });
+    assert.equal(model.api, undefined, `${id} should not have a per-model api override`);
+  }
+});
+
+test('mapGateframeModel respects runtime api override in overrides file', () => {
+  // Operator can force any model to use /v1/responses via the overrides file.
+  const model = mapGateframeModel(
+    { id: 'gateframe/minimax-2.7' },
+    { 'gateframe/minimax-2.7': { api: 'openai-responses' } },
+  );
+  assert.equal(model.api, 'openai-responses');
+});
+
+test('getResponsesApiModelIds returns known responses-api models', () => {
+  const ids = getResponsesApiModelIds();
+  assert.ok(ids.has('gateframe/chatgpt-5.4'), 'chatgpt-5.4 must be in the responses-api set');
+  assert.ok(!ids.has('gateframe/opus-4.7'), 'opus-4.7 must NOT be in the responses-api set');
+  assert.ok(!ids.has('gateframe/minimax-2.7'), 'minimax-2.7 must NOT be in the responses-api set');
+});
+
+test('getResponsesApiModelIds includes models with api override in overrides argument', () => {
+  const ids = getResponsesApiModelIds({ 'gateframe/minimax-2.7': { api: 'openai-responses' } });
+  assert.ok(ids.has('gateframe/minimax-2.7'));
+  assert.ok(ids.has('gateframe/chatgpt-5.4')); // still included from built-in defaults
+});
+
+test('registerGateframeProvider passes per-model api field for responses-api models', async () => {
+  const providerCalls = [];
+  await registerGateframeProvider({
+    pi: { registerProvider: (name, config) => providerCalls.push({ name, config }) },
+    env: {
+      GATEFRAME_API_KEY: 'gf_test',
+      GATEFRAME_BASE_URL: 'http://node1.gateframe.ai:3000',
+    },
+    fetchImpl: async () => new Response(JSON.stringify({
+      object: 'list',
+      data: [
+        { id: 'gateframe/chatgpt-5.4', object: 'model' },
+        { id: 'gateframe/opus-4.7', object: 'model' },
+      ],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+  });
+
+  assert.equal(providerCalls.length, 1);
+  const models = providerCalls[0].config.models;
+  const chatgpt = models.find(m => m.id === 'gateframe/chatgpt-5.4');
+  const opus = models.find(m => m.id === 'gateframe/opus-4.7');
+
+  assert.equal(chatgpt.api, 'openai-responses',
+    'chatgpt-5.4 must carry api: openai-responses in the models array');
+  assert.equal(opus.api, undefined,
+    'opus-4.7 must not carry a per-model api override (inherits provider default)');
+
+  // Provider-level default is still openai-completions
+  assert.equal(providerCalls[0].config.api, 'openai-completions');
 });

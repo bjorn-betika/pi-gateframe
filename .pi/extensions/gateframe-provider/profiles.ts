@@ -230,7 +230,10 @@ export async function activateProfile({
     return false;
   }
 
-  // Map matched models to pi model definitions
+  // Map matched models to pi model definitions.
+  // mapGateframeModel attaches `api: "openai-responses"` on entries that need
+  // the /v1/responses endpoint (e.g. gateframe/chatgpt-5.4). The provider-level
+  // `api` field below acts as the default for models without a per-model override.
   const models = matched.map((id) => mapGateframeModel({ id }, overrides));
 
   // Register provider with literal apiKey
