@@ -275,6 +275,11 @@ for the schema. Override values win over the built-in defaults; omitted
 fields fall through. A malformed file is ignored with a warning so a
 typo cannot disable the provider.
 
+For OpenAI-compatible role quirks, use the `compat` object. For example,
+`"supportsDeveloperRole": false` makes pi send its system prompt as
+`"role": "system"` instead of `"role": "developer"`. Pi does not expose a
+provider setting that turns the system prompt into `"role": "user"`.
+
 ### Long-term plan
 
 We have filed a feature request with Gateframe to expose this metadata

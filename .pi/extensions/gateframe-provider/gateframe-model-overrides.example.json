@@ -23,5 +23,11 @@
     "compat": {
       "thinkingFormat": "qwen"
     }
+  },
+  "gateframe/chatgpt-5.4": {
+    "compat": {
+      "supportsReasoningEffort": false,
+      "supportsDeveloperRole": false
+    }
   }
 }

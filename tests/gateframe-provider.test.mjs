@@ -631,13 +631,27 @@ test('documentation covers required Gateframe setup', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Per-model /v1/responses API routing
+// Per-model API routing
 // ---------------------------------------------------------------------------
 
-test('mapGateframeModel sets api: "openai-responses" for gateframe/chatgpt-5.4', () => {
+test('mapGateframeModel leaves api undefined for gateframe/chatgpt-5.4 by default', () => {
   const model = mapGateframeModel({ id: 'gateframe/chatgpt-5.4' });
-  assert.equal(model.api, 'openai-responses',
-    'chatgpt-5.4 must use /v1/responses because it rejects function tools with reasoning_effort on /v1/chat/completions');
+  assert.equal(model.api, undefined,
+    'chatgpt-5.4 must inherit provider-level openai-completions because Gateframe returns 404 for /v1/responses');
+  assert.equal(model.compat.supportsReasoningEffort, false,
+    'chatgpt-5.4 must omit reasoning_effort on /v1/chat/completions');
+});
+
+test('mapGateframeModel allows overriding developer role support for gateframe/chatgpt-5.4', () => {
+  const model = mapGateframeModel(
+    { id: 'gateframe/chatgpt-5.4' },
+    { 'gateframe/chatgpt-5.4': { compat: { supportsDeveloperRole: false } } },
+  );
+
+  assert.equal(model.compat.supportsDeveloperRole, false,
+    'operators can force pi to send the system prompt as role: system instead of developer');
+  assert.equal(model.compat.supportsReasoningEffort, false,
+    'role override must preserve built-in Gateframe compatibility defaults');
 });
 
 test('mapGateframeModel leaves api undefined for completions-compatible models', () => {
@@ -658,7 +672,7 @@ test('mapGateframeModel respects runtime api override in overrides file', () => 
 
 test('getResponsesApiModelIds returns known responses-api models', () => {
   const ids = getResponsesApiModelIds();
-  assert.ok(ids.has('gateframe/chatgpt-5.4'), 'chatgpt-5.4 must be in the responses-api set');
+  assert.ok(!ids.has('gateframe/chatgpt-5.4'), 'chatgpt-5.4 must NOT be in the responses-api set by default');
   assert.ok(!ids.has('gateframe/opus-4.7'), 'opus-4.7 must NOT be in the responses-api set');
   assert.ok(!ids.has('gateframe/minimax-2.7'), 'minimax-2.7 must NOT be in the responses-api set');
 });
@@ -666,10 +680,10 @@ test('getResponsesApiModelIds returns known responses-api models', () => {
 test('getResponsesApiModelIds includes models with api override in overrides argument', () => {
   const ids = getResponsesApiModelIds({ 'gateframe/minimax-2.7': { api: 'openai-responses' } });
   assert.ok(ids.has('gateframe/minimax-2.7'));
-  assert.ok(ids.has('gateframe/chatgpt-5.4')); // still included from built-in defaults
+  assert.ok(!ids.has('gateframe/chatgpt-5.4'));
 });
 
-test('registerGateframeProvider passes per-model api field for responses-api models', async () => {
+test('registerGateframeProvider does not pass per-model api field for gateframe/chatgpt-5.4 by default', async () => {
   const providerCalls = [];
   await registerGateframeProvider({
     pi: { registerProvider: (name, config) => providerCalls.push({ name, config }) },
@@ -691,8 +705,10 @@ test('registerGateframeProvider passes per-model api field for responses-api mod
   const chatgpt = models.find(m => m.id === 'gateframe/chatgpt-5.4');
   const opus = models.find(m => m.id === 'gateframe/opus-4.7');
 
-  assert.equal(chatgpt.api, 'openai-responses',
-    'chatgpt-5.4 must carry api: openai-responses in the models array');
+  assert.equal(chatgpt.api, undefined,
+    'chatgpt-5.4 must inherit provider-level openai-completions');
+  assert.equal(chatgpt.compat.supportsReasoningEffort, false,
+    'chatgpt-5.4 must not send reasoning_effort through chat completions');
   assert.equal(opus.api, undefined,
     'opus-4.7 must not carry a per-model api override (inherits provider default)');
 
