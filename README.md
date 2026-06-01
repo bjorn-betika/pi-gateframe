@@ -50,6 +50,12 @@ If you do not want to use `pi install`, starting pi from this repo still
 works because the implementation remains available under
 `.pi/extensions/gateframe-provider/` for local development.
 
+You can also install an explicit local path:
+
+```bash
+pi install /absolute/path/to/package
+```
+
 ## Configuration
 
 ### 1. Provide credentials
