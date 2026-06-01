@@ -128,7 +128,7 @@ export interface ModelOverride {
   name?: string;
   /** Override which HTTP API endpoint to use for this model.
    * - `"openai-completions"`: POST /v1/chat/completions (default for most models)
-   * - `"openai-responses"`:  POST /v1/responses (required for models like gpt-5.4 with reasoning_effort)
+   * - `"openai-responses"`:  POST /v1/responses
    */
   api?: "openai-completions" | "openai-responses";
   reasoning?: boolean;
@@ -168,12 +168,12 @@ export const KNOWN_MODEL_DEFAULTS: ModelOverrides = {
     maxTokens: 8_192,
   },
   "gateframe/chatgpt-5.4": {
-    // gpt-5.4 requires the /v1/responses endpoint — it rejects function tools
-    // with reasoning_effort on /v1/chat/completions (HTTP 502).
-    api: "openai-responses",
     reasoning: true,
     contextWindow: 128_000,
     maxTokens: 16_384,
+    compat: {
+      supportsReasoningEffort: false,
+    },
   },
   "gateframe/glm-5.1": {
     reasoning: false,
@@ -226,8 +226,8 @@ export function mapGateframeModel(model: { id: string }, overrides: ModelOverrid
     contextWindow: merged.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: merged.maxTokens ?? DEFAULT_MAX_TOKENS,
   };
-  // Per-model API override: some Gateframe models (e.g. gateframe/chatgpt-5.4)
-  // require /v1/responses instead of /v1/chat/completions.
+  // Per-model API override. Gateframe defaults to /v1/chat/completions;
+  // operators can opt specific models into /v1/responses via overrides.
   if (merged.api) {
     result.api = merged.api;
   }
@@ -384,9 +384,6 @@ export async function registerGateframeProvider({
   pi.registerProvider("gateframe", {
     baseUrl: config.baseUrl,
     apiKey: "$GATEFRAME_API_KEY",
-    // Default API for models that don't carry a per-model override.
-    // Models requiring /v1/responses (e.g. gateframe/chatgpt-5.4) carry
-    // `api: "openai-responses"` on their model entry from mapGateframeModel.
     api: "openai-completions",
     models,
   });
@@ -456,7 +453,7 @@ export function registerInitialGateframeProvider({
 
 /**
  * Returns the set of model IDs (based on KNOWN_MODEL_DEFAULTS and any
- * overrides) that are routed to the /v1/responses endpoint.
+ * overrides) that are explicitly routed to the /v1/responses endpoint.
  * Useful for informational display and tests.
  */
 export function getResponsesApiModelIds(overrides: ModelOverrides = {}): Set<string> {
@@ -607,9 +604,10 @@ export default function (pi: ExtensionAPI) {
     description: "Manage Gateframe profiles: add <name>, remove <name>, edit <name>, enable <name>, disable <name>",
     getArgumentCompletions: (prefix: string) => {
       const subcommands = ["add", "remove", "edit", "enable", "disable"];
+      const first = prefix.split(" ")[0] ?? "";
       return subcommands
-        .filter((s) => s.startsWith(prefix.split(" ")[0] ?? ""))
-        .map((s) => ({ label: s }));
+        .filter((s) => s.startsWith(first))
+        .map((s) => ({ value: s, label: s }));
     },
     handler: async (args, ctx) => {
       const parts = args.trim().split(/\s+/);
